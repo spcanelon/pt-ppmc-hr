@@ -1,0 +1,64 @@
+project:
+  type: website
+  title: "pt-ppmc-hr"
+  output-dir: docs
+
+website:
+  title: "PPMC Human Resources Data"
+  navbar:
+    background: primary
+    left:
+      - href: index.qmd
+        text: Home
+      - href: 01_data_cleaning.qmd
+        text: Project
+
+  sidebar:
+    - title: "Data work"
+      style: docked #floating
+      # background: "#dde6ee" # IIJ blue-gray
+      foreground: "#000000" # black
+      border: false
+      pinned: true
+      tools:
+      - icon: github
+        menu:
+          - text: Source Code
+            href: https://github.com/spcanelon/pt-ppmc-hr
+      contents:
+          - auto: /*.qmd
+
+format:
+  html:
+    theme:  # lumen united
+    - lumen
+    - custom.scss
+    mainfont: "Avenir"
+    fontsize: 1.3em
+    fontcolor: "#000000" #$green-ire
+    toc: true
+    code-fold: true #show
+    code-tools: false
+    code-overflow: wrap
+    code-link: true
+    notebook-links: true
+    lightbox: true
+    # grid:
+    #   sidebar-width: 325px
+
+execute:
+  freeze: auto
+
+editor_options:
+  chunk_output_type: console
+  
+callout-appearance: simple
+toc-expand: true
+toc-depth: 4
+# fig-width: 10  #7
+# fig-height: 6.5 #4.4
+
+knitr:
+    opts_chunk: 
+      dev: "ragg_png"
+      message: false
