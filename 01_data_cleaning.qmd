@@ -1,0 +1,309 @@
+---
+title: "Data cleaning"
+date: today
+---
+
+## Setup
+
+```{r setup}
+#| message: false
+
+# install XLConnect
+# remotes::install_github("miraisolutions/xlconnect")
+
+# install Java: https://www.timsanteford.com/posts/how-to-install-java-on-macos-using-homebrew/
+
+# src: https://stackoverflow.com/a/54827489
+
+# necessary for XLConnect
+options(java.parameters = c("-XX:+UseConcMarkSweepGC", "-Xmx8192m")) # set Java limit
+gc() # garbage collection
+
+pacman::p_load("janitor",
+               "readr",
+               "dplyr",
+               "lubridate",
+               "stringr",
+               "labelled",
+               "gtsummary",
+               "XLConnect")
+```
+
+```{r source-functions}
+# source(here::here("R", "helper_functions.R"))
+```
+
+## Import data
+
+```{r import}
+file <- here::here("data_raw", "ppmc_ee_20251219.xlsx")
+file_annotated <- here::here("data_raw", "ppmc_ee_20251219_annotated.xlsx")
+password <- keyring::key_get("ppmc-ee")
+
+wb <- loadWorkbook(filename = file_annotated, password = password)
+
+# List available sheets (to confirm sheet names)
+sheets <- getSheets(wb)
+print(sheets)  # Output: e.g., "ALL EE ", "DB_Pension"
+ 
+# Read a specific sheet (e.g., "ALL EE")
+data_all_ee <- readWorksheet(wb, sheet = "ALL EE ", startRow = 1, header = TRUE) |> clean_names()
+data_db_pension <- readWorksheet(wb, sheet = "DB_Pension", startRow = 1, header = TRUE) |> clean_names()
+data_dc_403b <- readWorksheet(wb, sheet = "DC_403b Retirement", startRow = 1, header = TRUE) |> clean_names()
+data_retirement_loans <- readWorksheet(wb, sheet = "Retirement Loans", startRow = 1, header = TRUE)
+# # --- hidden data
+# data_loa_wc_nosal <- readWorksheet(wb, sheet = "LOA_WC_No Sal Data", startRow = 1, header = TRUE) |> clean_names()
+# data_roster <- readWorksheet(wb, sheet = "Roster", startRow = 1, header = TRUE) |> clean_names()
+# # --- hidden data
+gc()
+ 
+```
+
+## Overview
+
+```{r, results="asis"}
+#| column: screen-inset-right
+
+# summarytools::view(
+#   summarytools::dfSummary(data_all_ee,
+#                           col.widths = c(100, 100, 200, 100, 100, 100, 100))
+#   )
+
+summarytools::dfSummary(
+  data_all_ee,
+  plain.ascii  = FALSE, 
+  style        = "grid", 
+  graph.magnif = 0.82, 
+  varnumbers   = FALSE,
+  valid.col    = FALSE,
+  tmp.img.dir  = "/tmp"
+)
+
+print(
+  summarytools::dfSummary(data_all_ee,
+                          varnumbers   = FALSE, 
+                          valid.col    = FALSE, 
+                          graph.magnif = 0.82,
+                          # col.widths = c(100, 200, 100, 100, 100)),
+  method = 'render',
+  max.tbl.height = 800))
+```
+
+
+## Salary category
+
+```{r add-labels}
+data_all_ee <-
+  data_all_ee |> 
+  set_variable_labels(
+    fte = "FTE",
+    annual_salary = "Annual salary",
+    race_ethnicity = "Race/ethnicity",
+    gender = "Gender",
+    job_category = "Job category",
+    sub_category = "Job sub category",
+    work_location = "Work location",
+    work_zip_code = "Work zip code",
+    state = "State",
+    zip_code = "Employee zip code"
+  )
+```
+
+
+```{r}
+data_all_ee <-
+  data_all_ee |>
+  mutate(annual_salary_category = case_when(
+    annual_salary < 62000 ~ "Less than 62k",
+    annual_salary >= 62000 & annual_salary < 100000 ~ "62k-100k",
+    annual_salary >= 100000 & annual_salary < 150000 ~ "100k-150k",
+    annual_salary >= 150000 & annual_salary < 200000 ~ "150k-200k",
+    annual_salary >= 200000 ~ "More than 200k"
+  )) |> 
+  mutate(annual_salary_category = factor(annual_salary_category,
+                                         levels = c("Less than 62k",
+                                                    "62k-100k",
+                                                    "100k-150k",
+                                                    "150k-200k",
+                                                    "More than 200k"))) |> 
+  set_variable_labels(annual_salary_category = "Annual salary category")
+```
+
+```{r}
+tbl_summary(data_all_ee,
+            include = c(race_ethnicity,
+                        job_category,
+                        fte,
+                        gender,
+                        annual_salary_category),
+            by = annual_salary_category,
+            type = all_continuous() ~ "continuous2",
+            statistic = all_continuous() ~ c(
+              "{mean} ({sd})",
+              "{median}",
+              "{min}-{max}"
+            ),
+            sort = list(c(job_category, gender) ~ "frequency")) |> 
+  add_overall() |> 
+  bold_labels() |> 
+  modify_caption("Employee Salary")
+```
+
+## Job category and subcategory
+
+```{r}
+tbl_summary(data_all_ee,
+            include = c(job_category,
+                        sub_category,
+                        annual_salary_category),
+            by = annual_salary_category,
+            percent = "column") |> 
+  add_overall() |> 
+  bold_labels() |> 
+  modify_caption("Job category by salary")
+
+tbl_job <-
+  tbl_strata_nested_stack(
+  data_all_ee,
+  strata = job_category,
+  .tbl_fun = ~ .x |> 
+    tbl_summary(include = c(sub_category,
+                            annual_salary_category),
+                by = annual_salary_category,
+                percent = "column") |> 
+    add_overall() |> 
+    # replace 0 (0%) and 0 (NA %) with em dash
+    # src: https://github.com/ddsjoberg/gtsummary/issues/2153#issuecomment-2664253147
+    modify_table_body(
+    ~ .x |> 
+      mutate(across(all_stat_cols(), ~ ifelse(. %in% c("0 (0%)" ,"0 (NA%)", "NA (NA, NA)"), NA, .)))
+  ) |> 
+  modify_missing_symbol(
+    symbol = "---", # converts to an em-dash
+    columns = all_stat_cols(),
+    rows = 
+      (var_type %in% c("continuous", "dichotomous") & row_type == "label") |
+      (var_type %in% c("continuous2", "categorical") & row_type == "level")
+  ),
+  row_header = "{strata}, n = {n} ({round(n/N*100)}%) (N = {N})"
+) |> 
+  modify_header(all_stat_cols() ~ "**{level}**") |> 
+  modify_bold(columns = "label", rows = tbl_indent_id1 > 0) |> 
+  modify_caption("Job category/subcategory by salary")
+tbl_job
+
+
+summary_job_income <- 
+  data_all_ee |> 
+  mutate(total_employees = n_distinct(ee_id)) |>
+  group_by(sub_category) |> 
+  mutate(n_job_sub_category = n_distinct(ee_id),
+         prop_job_sub_category = n_job_sub_category/total_employees) |> 
+  group_by(job_category, sub_category, annual_salary_category, 
+           n_job_sub_category, prop_job_sub_category) |> 
+  summarize(n_employees = n_distinct(ee_id),
+            prop_employees = n_employees/n_job_sub_category) |>
+  unique() |> 
+  ungroup() |> 
+  # convert to uppercase so sorting alphabetically ignores case
+  arrange(str_to_upper(job_category)) |> 
+  tidyr::pivot_wider(names_from = annual_salary_category,
+                     values_from = c(n_employees, prop_employees),
+                     names_glue = "{.value}_{annual_salary_category}") |> 
+  clean_names()
+```
+
+```{r}
+#| eval: false
+# gt ----
+summary_job_income |>
+  group_by(job_category) |> 
+  gt::gt() |> 
+  gt::fmt_percent(
+    columns = tidyselect::contains("prop"),
+    decimals = 1
+  ) |> 
+  gt::summary_rows(
+    groups = everything(),
+    columns = tidyselect::starts_with("n_"),
+    fns = list("All" ~ sum(., na.rm = TRUE)),
+    fmt = ~ fmt_number(., decimals = 0),
+    side = "top"
+  ) |>
+  gt::summary_rows(
+    groups = everything(),
+    columns = tidyselect::starts_with("prop_"),
+    fns = list("All" ~ sum(., na.rm = TRUE)),
+    fmt = ~ fmt_percent(., decimals = 1),
+    side = "top"
+  ) |>
+  gt::grand_summary_rows(
+    columns = tidyselect::starts_with("n_"),
+    fns = list(Total ~ sum(., na.rm = TRUE)),
+    fmt = ~ fmt_number(., decimals = 0, use_seps = FALSE)
+  ) |>
+  gt::cols_merge_n_pct(
+    col_n = n_job_sub_category,
+    col_pct = prop_job_sub_category
+  ) |> 
+  gt::cols_merge_n_pct(
+    col_n = n_employees_less_than_62k,
+    col_pct = prop_employees_less_than_62k
+  ) |> 
+  gt::cols_merge_n_pct(
+    col_n = n_employees_62k_100k,
+    col_pct = prop_employees_62k_100k
+  ) |> 
+  gt::cols_merge_n_pct(
+    col_n = n_employees_100k_150k,
+    col_pct = prop_employees_100k_150k
+  ) |> 
+  gt::cols_merge_n_pct(
+    col_n = n_employees_150k_200k,
+    col_pct = prop_employees_150k_200k
+  ) |> 
+  gt::cols_merge_n_pct(
+    col_n = n_employees_150k_200k,
+    col_pct = prop_employees_150k_200k
+  ) |> 
+  gt::cols_merge_n_pct(
+    col_n = n_employees_more_than_200k,
+    col_pct = prop_employees_more_than_200k
+  ) |> 
+  gt::tab_spanner(
+    columns = tidyselect::contains("job_sub_category"),
+    label = gt::md("**Overall**")
+  ) |> 
+  gt::tab_spanner(
+    columns = tidyselect::contains("less_than_62k"),
+    label = gt::md("**Less than 62k**")
+  ) |> 
+    gt::tab_spanner(
+    columns = tidyselect::contains("62k_100k"),
+    label = gt::md("**62k-100k**")
+  ) |> 
+  gt::tab_spanner(
+    columns = tidyselect::contains("100k_150k"),
+    label = gt::md("**100k-150k**")
+  ) |> 
+  gt::tab_spanner(
+    columns = tidyselect::contains("150k_200k"),
+    label = gt::md("**150k-200k**")
+  ) |> 
+  gt::tab_spanner(
+    columns = tidyselect::contains("more_than_200k"),
+    label = gt::md("**More than 200k**")
+  ) |> 
+  gt::sub_missing(
+    columns = everything(),
+    rows = everything(),
+    missing_text = "---"
+  ) |> 
+  gt::cols_label(
+    starts_with("n_") ~ "n (%)"
+  ) |>
+  gt::tab_header(
+    title = "Employees by job category/subcategory"
+  )
+```
+
