@@ -17,7 +17,7 @@ date: today
 
 # necessary for XLConnect
 options(java.parameters = c("-XX:+UseConcMarkSweepGC", "-Xmx8192m")) # set Java limit
-gc() # garbage collection
+gc() # garbage collection (for use here and after each change in the excel workbook object)
 
 pacman::p_load("janitor",
                "readr",
@@ -162,53 +162,57 @@ tbl_summary(data_all_ee,
   bold_labels() |> 
   modify_caption("Job category by salary")
 
-tbl_job <-
-  tbl_strata_nested_stack(
-  data_all_ee,
-  strata = job_category,
-  .tbl_fun = ~ .x |> 
-    tbl_summary(include = c(sub_category,
-                            annual_salary_category),
-                by = annual_salary_category,
-                percent = "column") |> 
-    add_overall() |> 
-    # replace 0 (0%) and 0 (NA %) with em dash
-    # src: https://github.com/ddsjoberg/gtsummary/issues/2153#issuecomment-2664253147
-    modify_table_body(
-    ~ .x |> 
-      mutate(across(all_stat_cols(), ~ ifelse(. %in% c("0 (0%)" ,"0 (NA%)", "NA (NA, NA)"), NA, .)))
-  ) |> 
-  modify_missing_symbol(
-    symbol = "---", # converts to an em-dash
-    columns = all_stat_cols(),
-    rows = 
-      (var_type %in% c("continuous", "dichotomous") & row_type == "label") |
-      (var_type %in% c("continuous2", "categorical") & row_type == "level")
-  ),
-  row_header = "{strata}, n = {n} ({round(n/N*100)}%) (N = {N})"
-) |> 
-  modify_header(all_stat_cols() ~ "**{level}**") |> 
-  modify_bold(columns = "label", rows = tbl_indent_id1 > 0) |> 
-  modify_caption("Job category/subcategory by salary")
-tbl_job
-
+# DO NOT USE: sub_category and job_category do not nest approrpriately ----
+# tbl_job <-
+#   tbl_strata_nested_stack(
+#   data_all_ee,
+#   strata = job_category,
+#   .tbl_fun = ~ .x |>
+#     tbl_summary(#data = data_all_ee,
+#                 include = c(#job_category,
+#                             sub_category,
+#                             annual_salary_category),
+#                 by = annual_salary_category,
+#                 percent = "column") |> 
+#     # add_overall() |>
+#     # replace 0 (0%) and 0 (NA %) with em dash
+#     # src: https://github.com/ddsjoberg/gtsummary/issues/2153#issuecomment-2664253147
+#     modify_table_body(
+#     ~ .x |>
+#       mutate(across(all_stat_cols(), ~ ifelse(. %in% c("0 (0%)" ,"0 (NA%)", "NA (NA, NA)"), NA, .)))
+#   ) |>
+#   modify_missing_symbol(
+#     symbol = "---", # converts to an em-dash
+#     columns = all_stat_cols(),
+#     rows =
+#       (var_type %in% c("continuous", "dichotomous") & row_type == "label") |
+#       (var_type %in% c("continuous2", "categorical") & row_type == "level")
+#   ),
+#   row_header = "{strata}, n = {n}, N = {N}"
+# ) |>
+#   modify_header(all_stat_cols() ~ "**{level}**") |>
+#   modify_bold(columns = "label", rows = tbl_indent_id1 > 0) |>
+#   modify_caption("Job category/subcategory by salary")
+# tbl_job
+# ----
 
 summary_job_income <- 
   data_all_ee |> 
-  mutate(total_employees = n_distinct(ee_id)) |>
-  group_by(sub_category) |> 
-  mutate(n_job_sub_category = n_distinct(ee_id),
-         prop_job_sub_category = n_job_sub_category/total_employees) |> 
-  group_by(job_category, sub_category, annual_salary_category, 
-           n_job_sub_category, prop_job_sub_category) |> 
-  summarize(n_employees = n_distinct(ee_id),
-            prop_employees = n_employees/n_job_sub_category) |>
+  group_by(job_category) |> 
+  mutate(n_job_category = n_distinct(ee_id)) |> 
+  group_by(job_category, n_job_category, sub_category) |> 
+  mutate(n_sub_category = n_distinct(ee_id),
+         prop_sub_category = n_sub_category/n_job_category) |> 
+  group_by(job_category, n_job_category, sub_category, 
+           n_sub_category, prop_sub_category, annual_salary_category) |> 
+  summarize(n_salary_category = n_distinct(ee_id),
+            prop_salary_category = n_salary_category/n_job_category) |>
   unique() |> 
   ungroup() |> 
   # convert to uppercase so sorting alphabetically ignores case
   arrange(str_to_upper(job_category)) |> 
   tidyr::pivot_wider(names_from = annual_salary_category,
-                     values_from = c(n_employees, prop_employees),
+                     values_from = c(n_salary_category, prop_salary_category),
                      names_glue = "{.value}_{annual_salary_category}") |> 
   clean_names()
 ```
@@ -219,9 +223,11 @@ summary_job_income <-
 summary_job_income |>
   group_by(job_category) |> 
   gt::gt() |> 
+  gt::cols_hide(n_job_category) |> 
   gt::fmt_percent(
     columns = tidyselect::contains("prop"),
-    decimals = 1
+    decimals = 1,
+    pattern = "({x})"
   ) |> 
   gt::summary_rows(
     groups = everything(),
@@ -234,7 +240,7 @@ summary_job_income |>
     groups = everything(),
     columns = tidyselect::starts_with("prop_"),
     fns = list("All" ~ sum(., na.rm = TRUE)),
-    fmt = ~ fmt_percent(., decimals = 1),
+    fmt = ~ fmt_percent(., decimals = 1, pattern = "({x})"),
     side = "top"
   ) |>
   gt::grand_summary_rows(
@@ -242,68 +248,47 @@ summary_job_income |>
     fns = list(Total ~ sum(., na.rm = TRUE)),
     fmt = ~ fmt_number(., decimals = 0, use_seps = FALSE)
   ) |>
-  gt::cols_merge_n_pct(
-    col_n = n_job_sub_category,
-    col_pct = prop_job_sub_category
-  ) |> 
-  gt::cols_merge_n_pct(
-    col_n = n_employees_less_than_62k,
-    col_pct = prop_employees_less_than_62k
-  ) |> 
-  gt::cols_merge_n_pct(
-    col_n = n_employees_62k_100k,
-    col_pct = prop_employees_62k_100k
-  ) |> 
-  gt::cols_merge_n_pct(
-    col_n = n_employees_100k_150k,
-    col_pct = prop_employees_100k_150k
-  ) |> 
-  gt::cols_merge_n_pct(
-    col_n = n_employees_150k_200k,
-    col_pct = prop_employees_150k_200k
-  ) |> 
-  gt::cols_merge_n_pct(
-    col_n = n_employees_150k_200k,
-    col_pct = prop_employees_150k_200k
-  ) |> 
-  gt::cols_merge_n_pct(
-    col_n = n_employees_more_than_200k,
-    col_pct = prop_employees_more_than_200k
-  ) |> 
   gt::tab_spanner(
-    columns = tidyselect::contains("job_sub_category"),
-    label = gt::md("**Overall**")
+    columns = c(n_sub_category, prop_sub_category),
+    label = gt::md("Overall")
   ) |> 
   gt::tab_spanner(
     columns = tidyselect::contains("less_than_62k"),
-    label = gt::md("**Less than 62k**")
+    label = gt::md("Less than 62k")
   ) |> 
     gt::tab_spanner(
     columns = tidyselect::contains("62k_100k"),
-    label = gt::md("**62k-100k**")
+    label = gt::md("62k-100k")
   ) |> 
   gt::tab_spanner(
     columns = tidyselect::contains("100k_150k"),
-    label = gt::md("**100k-150k**")
+    label = gt::md("100k-150k")
   ) |> 
   gt::tab_spanner(
     columns = tidyselect::contains("150k_200k"),
-    label = gt::md("**150k-200k**")
+    label = gt::md("150k-200k")
   ) |> 
   gt::tab_spanner(
     columns = tidyselect::contains("more_than_200k"),
-    label = gt::md("**More than 200k**")
+    label = gt::md("More than 200k")
   ) |> 
   gt::sub_missing(
     columns = everything(),
     rows = everything(),
     missing_text = "---"
   ) |> 
+  gt::tab_style(
+    style = gt::cell_text(weight = "bold"),
+    locations = list(gt::cells_row_groups(),
+                     gt::cells_column_spanners(),
+                     gt::cells_column_labels(sub_category))
+  ) |> 
   gt::cols_label(
-    starts_with("n_") ~ "n (%)"
+    starts_with("n_") ~ "n",
+    starts_with("prop_") ~ "(%)"
   ) |>
   gt::tab_header(
-    title = "Employees by job category/subcategory"
+    title = "Employees by job category / sub category"
   )
 ```
 
