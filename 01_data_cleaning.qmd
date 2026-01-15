@@ -78,19 +78,8 @@ summarytools::dfSummary(
   valid.col    = FALSE,
   tmp.img.dir  = "/tmp"
 )
-
-print(
-  summarytools::dfSummary(data_all_ee,
-                          varnumbers   = FALSE, 
-                          valid.col    = FALSE, 
-                          graph.magnif = 0.82,
-                          # col.widths = c(100, 200, 100, 100, 100)),
-  method = 'render',
-  max.tbl.height = 800))
 ```
 
-
-## Salary category
 
 ```{r add-labels}
 data_all_ee <-
@@ -107,12 +96,21 @@ data_all_ee <-
     state = "State",
     zip_code = "Employee zip code"
   )
+
+data_ee_trim <-
+  data_all_ee |> 
+  select(ee_id, fte, annual_salary, race_ethnicity, gender,
+         job_category, sub_category, work_location, work_zip_code,
+         state, zip_code)
 ```
 
 
+## Salary category
+
+
 ```{r}
-data_all_ee <-
-  data_all_ee |>
+data_ee_trim <-
+  data_ee_trim |>
   mutate(annual_salary_category = case_when(
     annual_salary < 62000 ~ "Less than 62k",
     annual_salary >= 62000 & annual_salary < 100000 ~ "62k-100k",
@@ -130,7 +128,7 @@ data_all_ee <-
 ```
 
 ```{r}
-tbl_summary(data_all_ee,
+tbl_summary(data_ee_trim,
             include = c(race_ethnicity,
                         job_category,
                         fte,
@@ -152,7 +150,7 @@ tbl_summary(data_all_ee,
 ## Job category and subcategory
 
 ```{r}
-tbl_summary(data_all_ee,
+tbl_summary(data_ee_trim,
             include = c(job_category,
                         sub_category,
                         annual_salary_category),
@@ -165,10 +163,10 @@ tbl_summary(data_all_ee,
 # DO NOT USE: sub_category and job_category do not nest approrpriately ----
 # tbl_job <-
 #   tbl_strata_nested_stack(
-#   data_all_ee,
+#   data_ee_trim,
 #   strata = job_category,
 #   .tbl_fun = ~ .x |>
-#     tbl_summary(#data = data_all_ee,
+#     tbl_summary(#data = data_ee_trim,
 #                 include = c(#job_category,
 #                             sub_category,
 #                             annual_salary_category),
@@ -197,7 +195,7 @@ tbl_summary(data_all_ee,
 # ----
 
 summary_job_income <- 
-  data_all_ee |> 
+  data_ee_trim |> 
   group_by(job_category) |> 
   mutate(n_job_category = n_distinct(ee_id)) |> 
   group_by(job_category, n_job_category, sub_category) |> 
@@ -232,20 +230,20 @@ summary_job_income |>
   gt::summary_rows(
     groups = everything(),
     columns = tidyselect::starts_with("n_"),
-    fns = list("All" ~ sum(., na.rm = TRUE)),
+    fns = list("Total, job category" ~ sum(., na.rm = TRUE)),
     fmt = ~ fmt_number(., decimals = 0),
     side = "top"
   ) |>
   gt::summary_rows(
     groups = everything(),
     columns = tidyselect::starts_with("prop_"),
-    fns = list("All" ~ sum(., na.rm = TRUE)),
+    fns = list("Total, job category" ~ sum(., na.rm = TRUE)),
     fmt = ~ fmt_percent(., decimals = 1, pattern = "({x})"),
     side = "top"
   ) |>
   gt::grand_summary_rows(
     columns = tidyselect::starts_with("n_"),
-    fns = list(Total ~ sum(., na.rm = TRUE)),
+    fns = list("Total, N" ~ sum(., na.rm = TRUE)),
     fmt = ~ fmt_number(., decimals = 0, use_seps = FALSE)
   ) |>
   gt::tab_spanner(
@@ -288,7 +286,84 @@ summary_job_income |>
     starts_with("prop_") ~ "(%)"
   ) |>
   gt::tab_header(
-    title = "Employees by job category / sub category"
+    title = "Job category / sub category by salary category"
   )
 ```
 
+## FTE
+
+```{r}
+fte_403b <-
+  data_dc_403b |> 
+  left_join(data_ee_trim,
+            by = c("employment_id" = "ee_id"))
+
+fte_pension <-
+  data_db_pension |> 
+  left_join(data_ee_trim,
+            by = c("employment_id" = "ee_id"))
+
+tbl_fte_403b <-
+  fte_403b |> 
+  tbl_summary(include = c(fte),
+              type = all_continuous() ~ "continuous2",
+              statistic = all_continuous() ~ c(
+                "{min}",
+                "{max}"
+              ),
+              by = work_type_description) |> 
+  modify_caption("FTE by work description")
+
+tbl_fte_pension <-
+  fte_pension |> 
+  tbl_summary(include = c(fte),
+              type = all_continuous() ~ "continuous2",
+              statistic = all_continuous() ~ c(
+                "{min}",
+                "{max}"
+              ),
+              by = work_type_description) |> 
+  modify_caption("FTE among pension employees")
+
+tbl_stack(tbls = list(tbl_fte_403b, tbl_fte_pension),
+          group_header = c("403b", "Pension")) |> 
+  modify_source_note('"Unknown" represents employees excluded from shared dataset')
+```
+
+
+## Retirement plans
+
+```{r}
+data_ee_pension_403b <-
+  data_ee_trim |> 
+  mutate(flag_pension = if_else(ee_id %in% data_db_pension$employment_id, "Yes", "No"),
+         flag_pension = factor(flag_pension, levels = c("Yes", "No")),
+         flag_403b = if_else(ee_id %in% data_dc_403b$employment_id, "Yes", "No"),
+         flag_403b = factor(flag_403b, levels = c("Yes", "No"))) |> 
+  set_variable_labels(flag_pension = "Pension plan",
+                      flag_403b = "403b Plan")
+
+data_ee_pension_403b |> 
+  tbl_summary(include = c(flag_pension,
+                          annual_salary_category,
+                          race_ethnicity,
+                          gender,
+                          job_category),
+              by = flag_403b,
+              percent = "column",
+              sort = list(job_category ~ "frequency")) |> 
+  add_overall() |> 
+  modify_caption("Employees with 403b retirement plan")
+
+data_ee_pension_403b |> 
+  tbl_summary(include = c(flag_403b,
+                          annual_salary_category,
+                          race_ethnicity,
+                          gender,
+                          job_category),
+              by = flag_pension,
+              percent = "column",
+              sort = list(job_category ~ "frequency")) |> 
+  add_overall() |> 
+  modify_caption("Employees with pension plan")
+```
