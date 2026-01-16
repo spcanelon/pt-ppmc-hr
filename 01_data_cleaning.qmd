@@ -1,12 +1,15 @@
 ---
 title: "Data cleaning"
 date: today
+format:
+  html:
+    embed-resources: true
+     
 ---
-
-## Setup
 
 ```{r setup}
 #| message: false
+#| output: false
 
 # install XLConnect
 # remotes::install_github("miraisolutions/xlconnect")
@@ -27,15 +30,16 @@ pacman::p_load("janitor",
                "labelled",
                "gtsummary",
                "XLConnect")
+
+theme_gtsummary_compact()
 ```
 
 ```{r source-functions}
 # source(here::here("R", "helper_functions.R"))
 ```
 
-## Import data
-
 ```{r import}
+#| output: false
 file <- here::here("data_raw", "ppmc_ee_20251219.xlsx")
 file_annotated <- here::here("data_raw", "ppmc_ee_20251219_annotated.xlsx")
 password <- keyring::key_get("ppmc-ee")
@@ -44,7 +48,7 @@ wb <- loadWorkbook(filename = file_annotated, password = password)
 
 # List available sheets (to confirm sheet names)
 sheets <- getSheets(wb)
-print(sheets)  # Output: e.g., "ALL EE ", "DB_Pension"
+# print(sheets)  # Output: e.g., "ALL EE ", "DB_Pension"
  
 # Read a specific sheet (e.g., "ALL EE")
 data_all_ee <- readWorksheet(wb, sheet = "ALL EE ", startRow = 1, header = TRUE) |> clean_names()
@@ -59,9 +63,10 @@ gc()
  
 ```
 
-## Overview
+<!--## Overview-->
 
 ```{r, results="asis"}
+#| eval: false
 #| column: screen-inset-right
 
 # summarytools::view(
@@ -128,11 +133,12 @@ data_ee_trim <-
 ```
 
 ```{r}
+#| column: page-right
 tbl_summary(data_ee_trim,
             include = c(race_ethnicity,
-                        job_category,
                         fte,
                         gender,
+                        # job_category,
                         annual_salary_category),
             by = annual_salary_category,
             type = all_continuous() ~ "continuous2",
@@ -141,24 +147,24 @@ tbl_summary(data_ee_trim,
               "{median}",
               "{min}-{max}"
             ),
-            sort = list(c(job_category, gender) ~ "frequency")) |> 
+            sort = list(c(gender) ~ "alphanumeric")) |> 
   add_overall() |> 
   bold_labels() |> 
-  modify_caption("Employee Salary")
+  as_gt() %>%
+  gt::cols_width(
+    "label" ~ px(220),
+    everything() ~ px(110)
+  ) |> 
+  gt::tab_header(title = "Employee Salary") |> 
+  gt::opt_table_font(font = "Avenir", 
+                     stack = "rounded-sans")
 ```
 
 ## Job category and subcategory
 
 ```{r}
-tbl_summary(data_ee_trim,
-            include = c(job_category,
-                        sub_category,
-                        annual_salary_category),
-            by = annual_salary_category,
-            percent = "column") |> 
-  add_overall() |> 
-  bold_labels() |> 
-  modify_caption("Job category by salary")
+#| column: page-right
+#| output: false
 
 # DO NOT USE: sub_category and job_category do not nest approrpriately ----
 # tbl_job <-
@@ -216,7 +222,7 @@ summary_job_income <-
 ```
 
 ```{r}
-#| eval: false
+#| column: page-right
 # gt ----
 summary_job_income |>
   group_by(job_category) |> 
@@ -285,9 +291,16 @@ summary_job_income |>
     starts_with("n_") ~ "n",
     starts_with("prop_") ~ "(%)"
   ) |>
+  gt::cols_width(
+    sub_category ~ px(260),
+    everything() ~ px(80)
+  ) |> 
   gt::tab_header(
     title = "Job category / sub category by salary category"
-  )
+  ) |> 
+  gt::opt_vertical_padding(scale = 0.2) |> 
+  gt::opt_table_font(font = "Avenir", 
+                     stack = "rounded-sans")
 ```
 
 ## FTE
@@ -311,8 +324,8 @@ tbl_fte_403b <-
                 "{min}",
                 "{max}"
               ),
-              by = work_type_description) |> 
-  modify_caption("FTE by work description")
+              by = work_type_description) #|> 
+  # modify_caption("FTE among 403b employees")
 
 tbl_fte_pension <-
   fte_pension |> 
@@ -322,18 +335,31 @@ tbl_fte_pension <-
                 "{min}",
                 "{max}"
               ),
-              by = work_type_description) |> 
-  modify_caption("FTE among pension employees")
+              by = work_type_description) #|> 
+  # modify_caption("FTE among pension employees")
 
 tbl_stack(tbls = list(tbl_fte_403b, tbl_fte_pension),
           group_header = c("403b", "Pension")) |> 
-  modify_source_note('"Unknown" represents employees excluded from shared dataset')
+  modify_source_note('"Unknown" represents employees excluded from shared dataset') |> 
+  as_gt() |> 
+  gt::cols_width(
+    label ~ px(90),
+    everything() ~ px(80)
+  ) |> 
+  gt::tab_header(title = "FTE by Work Description") |> 
+  gt::opt_vertical_padding(scale = 0.25) |> 
+  gt::opt_table_font(font = "Avenir", 
+                     stack = "rounded-sans")
 ```
 
 
 ## Retirement plans
 
+### 403b
+
 ```{r}
+#| column: page-right
+
 data_ee_pension_403b <-
   data_ee_trim |> 
   mutate(flag_pension = if_else(ee_id %in% data_db_pension$employment_id, "Yes", "No"),
@@ -353,7 +379,18 @@ data_ee_pension_403b |>
               percent = "column",
               sort = list(job_category ~ "frequency")) |> 
   add_overall() |> 
-  modify_caption("Employees with 403b retirement plan")
+  as_gt() |> 
+  gt::tab_header(title = "Employees with 403b retirement plan") |> 
+  gt::opt_vertical_padding(scale = 0.25) |> 
+  gt::opt_table_font(font = "Avenir", 
+                     stack = "rounded-sans")
+  
+```
+
+### Pension
+
+```{r}
+#| column: page-right
 
 data_ee_pension_403b |> 
   tbl_summary(include = c(flag_403b,
@@ -365,5 +402,43 @@ data_ee_pension_403b |>
               percent = "column",
               sort = list(job_category ~ "frequency")) |> 
   add_overall() |> 
-  modify_caption("Employees with pension plan")
+  as_gt() |> 
+  gt::tab_header(title = "Employees with pension plan") |> 
+  gt::opt_vertical_padding(scale = 0.25) |> 
+  gt::opt_table_font(font = "Avenir", 
+                     stack = "rounded-sans")
 ```
+
+## Retirement loans
+
+```{r}
+#| column: page-right
+
+summary_retirement_loans <-
+  data_retirement_loans |> 
+  clean_names() |> 
+  group_by(employment_id) |> 
+  mutate(n_loans = n()) |> 
+  set_variable_labels(description = "Loan description")
+
+data_ee_loans <-
+  data_ee_trim |> 
+  left_join(summary_retirement_loans, by = c("ee_id" = "employment_id"))
+
+data_ee_loans |> 
+  tbl_summary(include = c(n_loans,
+                          description,
+                          annual_salary_category,
+                          race_ethnicity,
+                          gender,
+                          job_category),
+              by = n_loans,
+              sort = list(description ~ "alphanumeric")) |> 
+  add_overall() |> 
+  as_gt() |> 
+  gt::tab_header(title = "Number of retirement loans") |>
+  gt::opt_vertical_padding(scale = 0.25) |> 
+  gt::opt_table_font(font = "Avenir", 
+                     stack = "rounded-sans")
+```
+
