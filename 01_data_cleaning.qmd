@@ -29,7 +29,9 @@ pacman::p_load("janitor",
                "stringr",
                "labelled",
                "gtsummary",
-               "XLConnect")
+               "XLConnect",
+               "sf",
+               "rdeck")
 
 theme_gtsummary_compact()
 ```
@@ -40,6 +42,8 @@ theme_gtsummary_compact()
 
 ```{r import}
 #| output: false
+
+# HR data ----
 file <- here::here("data_raw", "ppmc_ee_20251219.xlsx")
 file_annotated <- here::here("data_raw", "ppmc_ee_20251219_annotated.xlsx")
 password <- keyring::key_get("ppmc-ee")
@@ -60,7 +64,18 @@ data_retirement_loans <- readWorksheet(wb, sheet = "Retirement Loans", startRow 
 # data_roster <- readWorksheet(wb, sheet = "Roster", startRow = 1, header = TRUE) |> clean_names()
 # # --- hidden data
 gc()
- 
+
+# zip codes ----
+boxDrive <- here::here("/Users/scanelon/Library/CloudStorage/Box-Box", "Green-Geobirth R01", "3. Data-related (nonPHI)", "Data_Spatial")
+
+zips <-
+  st_read(paste(boxDrive,
+                "data_intermediate",
+                "spatial_layers",
+                "Open Data Philly",
+                "City_Boundaries",
+                "Zipcodes_Poly.gpkg",
+                sep = "/"))
 ```
 
 <!--## Overview-->
@@ -150,9 +165,10 @@ tbl_summary(data_ee_trim,
             sort = list(c(gender) ~ "alphanumeric")) |> 
   add_overall() |> 
   bold_labels() |> 
+  modify_header(all_stat_cols() ~ "**{level}**<br>N = {n} ({style_percent(p)}%)") |>
   as_gt() %>%
   gt::cols_width(
-    "label" ~ px(220),
+    label ~ px(220),
     everything() ~ px(110)
   ) |> 
   gt::tab_header(title = "Employee Salary") |> 
@@ -340,7 +356,8 @@ tbl_fte_pension <-
 
 tbl_stack(tbls = list(tbl_fte_403b, tbl_fte_pension),
           group_header = c("403b", "Pension")) |> 
-  modify_source_note('"Unknown" represents employees excluded from shared dataset') |> 
+  modify_source_note('"Unknown" represents employees excluded from shared dataset') |>
+  modify_header(all_stat_cols() ~ "**{level}**<br>N = {n} ({style_percent(p)}%)") |>
   as_gt() |> 
   gt::cols_width(
     label ~ px(90),
@@ -378,8 +395,11 @@ data_ee_pension_403b |>
               by = flag_403b,
               percent = "column",
               sort = list(job_category ~ "frequency")) |> 
-  add_overall() |> 
+  add_overall() |>
+  modify_header(all_stat_cols() ~ "**{level}**<br>N = {n} ({style_percent(p)}%)") |>
   as_gt() |> 
+  gt::cols_width(label ~ px(220),
+                 everything() ~ px(80)) |> 
   gt::tab_header(title = "Employees with 403b retirement plan") |> 
   gt::opt_vertical_padding(scale = 0.25) |> 
   gt::opt_table_font(font = "Avenir", 
@@ -401,8 +421,11 @@ data_ee_pension_403b |>
               by = flag_pension,
               percent = "column",
               sort = list(job_category ~ "frequency")) |> 
-  add_overall() |> 
+  add_overall() |>
+  modify_header(all_stat_cols() ~ "**{level}**<br>N = {n} ({style_percent(p)}%)") |>
   as_gt() |> 
+  gt::cols_width(label ~ px(220),
+                 everything() ~ px(80)) |> 
   gt::tab_header(title = "Employees with pension plan") |> 
   gt::opt_vertical_padding(scale = 0.25) |> 
   gt::opt_table_font(font = "Avenir", 
@@ -434,11 +457,172 @@ data_ee_loans |>
                           job_category),
               by = n_loans,
               sort = list(description ~ "alphanumeric")) |> 
-  add_overall() |> 
+  add_overall() |>
+  modify_header(all_stat_cols() ~ "**{level}**<br>N = {n} ({style_percent(p)}%)") |>
   as_gt() |> 
+  gt::cols_width(label ~ px(220),
+                 everything() ~ px(80)) |> 
   gt::tab_header(title = "Number of retirement loans") |>
   gt::opt_vertical_padding(scale = 0.25) |> 
   gt::opt_table_font(font = "Avenir", 
                      stack = "rounded-sans")
 ```
+
+## Employee location
+
+### Work vs. home zip codes
+
+```{r}
+#| column: page-right
+
+data_ee_location <-
+  data_ee_trim |>
+  mutate(work_zip_code_short = str_remove(work_zip_code, pattern = "\\-[0-9]{4}"),
+         zip_code_short = str_remove(zip_code, pattern = "\\-[0-9]{4}")) |> 
+  mutate(flag_work_and_home = if_else(work_zip_code_short == zip_code_short, "Yes", "No"),
+         flag_work_and_home = factor(flag_work_and_home,
+                                     levels = c("Yes", "No"))) |> 
+  set_variable_labels(flag_work_and_home = "Same zip for work and home",
+                      work_zip_code_short = "Work zip code",
+                      zip_code_short = "Home zip code")
+
+data_ee_location |> 
+  tbl_summary(include = c(flag_work_and_home,
+                          annual_salary_category,
+                          race_ethnicity,
+                          gender,
+                          job_category),
+              by = flag_work_and_home) |> 
+  add_overall() |>
+  modify_header(all_stat_cols() ~ "**{level}**<br>N = {n} ({style_percent(p)}%)") |> 
+  as_gt() |>
+  gt::cols_width(label ~ px(220),
+                 everything() ~ px(80)) |> 
+  gt::tab_header("Employees work in the zip code they live in") |> 
+  gt::opt_vertical_padding(scale = 0.2) |> 
+  gt::opt_table_font(font = "Avenir",
+                     stack = "rounded-sans")
+  
+```
+
+```{r}
+#| output: false
+
+summary_zip_codes <-
+  data_ee_location |> 
+  group_by(zip_code_short) |> 
+  mutate(n_zip_code = n_distinct(ee_id),
+         n_zip_code = as.numeric(n_zip_code)) |> 
+  group_by(zip_code_short, n_zip_code, annual_salary_category) |> 
+  summarize(n_salary_category = n_distinct(ee_id),
+            prop_salary_category = n_salary_category/n_zip_code) |> 
+  arrange(desc(n_zip_code)) |> 
+  unique() |> 
+  ungroup() |> 
+  mutate(n_zip_code_cat = cut(
+      n_zip_code,
+      breaks = seq(0, 100, by = 20),
+      labels = c("0-20", "20-40", "40-60", "60-80", "80-100"),
+      include.lowest = TRUE,
+      right = TRUE),
+      .after = n_zip_code
+      ) |> 
+  set_variable_labels(zip_code_short = "Zip code",
+                      n_zip_code = "Number in zip code",
+                      n_zip_code_cat = "Number in zip code")
+```
+
+### Home zip code & salary
+
+```{r}
+#| column: page-right
+
+data_ee_location |> 
+  tbl_summary(include = c(zip_code_short,
+                          annual_salary_category),
+              by = annual_salary_category,
+              sort = zip_code_short ~ "frequency") |> 
+  add_overall() |> 
+  modify_header(all_stat_cols() ~ "**{level}**<br>N = {n} ({style_percent(p)}%)") |> 
+  as_gt() |>
+  gt::cols_width(label ~ px(100),
+                 everything() ~ px(80)) |> 
+  gt::tab_header("Employee home zip code and salary categories") |> 
+  gt::opt_vertical_padding(scale = 0.25) |> 
+  gt::opt_table_font(font = "Avenir",
+                     stack = "rounded-sans") |> 
+  gt::opt_interactive(page_size_default = 20,
+                      use_compact_mode = TRUE,
+                      use_search = TRUE)
+
+sf_zips <-
+  zips |>
+  select(CODE) |> 
+  left_join(summary_zip_codes, 
+            by = c("CODE" = "zip_code_short"), 
+            keep = TRUE) |> 
+  select(-CODE)
+
+# mapgl::maplibre_view(
+#   data = sf_zips,
+#   column = "n_zip_code"
+# )
+
+```
+
+### Map
+
+```{r}
+#| output: false
+mapbox_access_token()
+```
+
+
+```{r}
+#| column: page-right
+
+map_zip_codes <-
+  rdeck(map_style = mapbox_light(),
+      initial_view_state = view_state(
+        center = c(-75.14873, 39.99692),
+        zoom = 9.5
+      )) |> 
+  # add unseen schools ----
+  add_polygon_layer(
+    data = sf_zips, 
+    name = "Number of employees\nin zip code",
+    get_polygon = geom,
+    get_line_color = "#FFFFFF",
+    get_line_width = 0.25,
+    line_width_units = "pixels",
+    stroked = TRUE,
+    filled = TRUE,
+    # get_fill_color = scale_color_linear(
+    #   col = "n_zip_code",
+    #   palette = scales::viridis_pal()),
+    get_fill_color =  scale_color_category(
+      col = "n_zip_code_cat",
+      palette = scales::viridis_pal(),
+      col_label = "Number in zip code"
+    ),
+    line_width_scale = 5,
+    # line_width_min_pixels = 5,
+    # line_width_max_pixels = 30,
+    auto_highlight = TRUE,
+    highlight_color = "#e69138", # ffd966 yellow
+    visible = TRUE,
+    pickable = TRUE,
+    tooltip = c(zip_code_short, n_zip_code)
+  )
+map_zip_codes
+
+htmlwidgets::saveWidget(
+  widget = map_zip_codes,
+  title = "Number of employees in zip code",
+  file = here::here("data", "map_zip_codes.html"),
+  selfcontained = TRUE
+) 
+
+```
+
 
